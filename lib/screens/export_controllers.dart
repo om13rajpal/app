@@ -1,0 +1,9 @@
+export 'add_new_trip/add_new_trip_controller.dart';
+export 'add_vessel/add_vessel_controller.dart';
+export 'forget_password/forget_password_controller.dart';
+export 'home/home_controller.dart';
+export 'login/login_controller.dart';
+export 'reset_password/reset_password_controller.dart';
+export 'signup/signup_controller.dart';
+export 'verification/verification_controller.dart';
+export 'vessel_detail/vessel_detail_controller.dart';

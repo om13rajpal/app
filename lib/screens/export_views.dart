@@ -1,0 +1,13 @@
+export 'add_vessel/add_vessel_view.dart';
+export 'add_new_trip/add_new_trip_view.dart';
+export 'onboarding/onboarding_view.dart';
+export 'forget_password/forget_password_view.dart';
+export 'home/home_view.dart';
+export 'home/info_view.dart';
+export 'login/login_view.dart';
+export 'reset_password/reset_password_view.dart';
+export 'signup/signup_view.dart';
+export 'verification/verification_view.dart';
+export 'vessel_detail/vessel_detail_view.dart';
+export 'vessel_detail/widgets/speed_view.dart';
+export 'vessel_detail/widgets/trip_loss_report.dart';

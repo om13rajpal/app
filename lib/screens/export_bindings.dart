@@ -1,0 +1,9 @@
+export 'add_new_trip/add_new_trip_bindings.dart';
+export 'add_vessel/add_vessel_bindings.dart';
+export 'forget_password/forget_password_bindings.dart';
+export 'home/home_bindings.dart';
+export 'login/login_bindings.dart';
+export 'reset_password/reset_password_bindings.dart';
+export 'signup/signup_bindings.dart';
+export 'verification/verification_bindings.dart';
+export 'vessel_detail/vessel_detail_bindings.dart';
