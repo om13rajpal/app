@@ -1,11 +1,7 @@
 /// Voice Dialog View - Continuous Listening Mode
 ///
-/// A modern, hands-free voice assistant UI that:
-/// - Auto-listens continuously
-/// - Shows streaming transcription in real-time
-/// - Displays AI responses as they stream
-/// - Shows conversation history
-/// - Provides pause/resume control
+/// A hands-free voice assistant UI with real-time transcription,
+/// streaming AI responses, and conversation history.
 library;
 
 import 'package:flutter/material.dart';
@@ -18,7 +14,7 @@ import '../../services/voice/voice_conversation_controller.dart';
 import '../../utils/constants/color_constant.dart';
 import '../../widgets/theme_text.dart';
 
-/// The main voice dialog widget with continuous listening.
+/// Main voice dialog widget with continuous listening.
 class VoiceDialogView extends StatelessWidget {
   final bool showSkipButton;
 
@@ -50,10 +46,6 @@ class VoiceDialogView extends StatelessWidget {
     );
   }
 
-  // ===========================================================================
-  // HEADER
-  // ===========================================================================
-
   Widget _buildHeader(VoiceConversationController controller) {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
@@ -68,7 +60,6 @@ class VoiceDialogView extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // AI Avatar
           Container(
             width: 40.sp,
             height: 40.sp,
@@ -87,8 +78,6 @@ class VoiceDialogView extends StatelessWidget {
             ),
           ),
           SizedBox(width: 12.w),
-
-          // Title and status
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -116,8 +105,6 @@ class VoiceDialogView extends StatelessWidget {
               ],
             ),
           ),
-
-          // Skip button (optional)
           if (showSkipButton)
             GestureDetector(
               onTap: controller.closeDialog,
@@ -134,10 +121,7 @@ class VoiceDialogView extends StatelessWidget {
                 ),
               ),
             ),
-
           SizedBox(width: 8.w),
-
-          // Close button
           GestureDetector(
             onTap: controller.closeDialog,
             child: Container(
@@ -193,10 +177,6 @@ class VoiceDialogView extends StatelessWidget {
     return _PulsingDot(color: dotColor, shouldPulse: shouldPulse);
   }
 
-  // ===========================================================================
-  // CONVERSATION AREA
-  // ===========================================================================
-
   Widget _buildConversationArea(VoiceConversationController controller) {
     final state = controller.dialogState.value;
 
@@ -210,12 +190,9 @@ class VoiceDialogView extends StatelessWidget {
 
     return Column(
       children: [
-        // Conversation history
         Expanded(
           child: _buildConversationList(controller),
         ),
-
-        // Current interaction (live transcription or AI response)
         _buildCurrentInteraction(controller),
       ],
     );
@@ -311,7 +288,6 @@ class VoiceDialogView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Animated icon container with gradient glow
             Container(
               width: 100.sp,
               height: 100.sp,
@@ -354,7 +330,6 @@ class VoiceDialogView extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
             SizedBox(height: 28.h),
-            // Hint chips
             Wrap(
               spacing: 8.w,
               runSpacing: 8.h,
@@ -401,7 +376,6 @@ class VoiceDialogView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isUser) ...[
-            // AI avatar
             Container(
               width: 28.sp,
               height: 28.sp,
@@ -417,8 +391,6 @@ class VoiceDialogView extends StatelessWidget {
             ),
             SizedBox(width: 8.w),
           ],
-
-          // Message bubble
           Flexible(
             child: Container(
               padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
@@ -443,16 +415,11 @@ class VoiceDialogView extends StatelessWidget {
               ),
             ),
           ),
-
           if (isUser) SizedBox(width: 8.w),
         ],
       ),
     );
   }
-
-  // ===========================================================================
-  // CURRENT INTERACTION
-  // ===========================================================================
 
   Widget _buildCurrentInteraction(VoiceConversationController controller) {
     final state = controller.dialogState.value;
@@ -463,18 +430,15 @@ class VoiceDialogView extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    // Show live transcription when listening
     if (state == VoiceDialogState.listening && hasLiveText) {
       return _buildLiveTranscriptionCard(controller);
     }
 
-    // Show AI response when processing or speaking
     if ((state == VoiceDialogState.processing || state == VoiceDialogState.aiSpeaking) &&
         (hasAiResponse || state == VoiceDialogState.processing)) {
       return _buildAiResponseCard(controller);
     }
 
-    // Show listening indicator when waiting for speech
     if (state == VoiceDialogState.listening) {
       return _buildListeningIndicator(controller);
     }
@@ -512,7 +476,6 @@ class VoiceDialogView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Waveform visualization - larger and more prominent
           SizedBox(
             height: 80.h,
             child: _AudioWaveform(audioLevel: controller.audioLevel),
@@ -572,7 +535,6 @@ class VoiceDialogView extends StatelessWidget {
             textAlign: TextAlign.left,
           ),
           SizedBox(height: 8.h),
-          // Waveform
           SizedBox(
             height: 30.h,
             child: _AudioWaveform(audioLevel: controller.audioLevel),
@@ -655,10 +617,6 @@ class VoiceDialogView extends StatelessWidget {
     );
   }
 
-  // ===========================================================================
-  // BOTTOM BAR
-  // ===========================================================================
-
   Widget _buildBottomBar(VoiceConversationController controller) {
     final state = controller.dialogState.value;
     final isPaused = controller.isPaused.value;
@@ -670,14 +628,12 @@ class VoiceDialogView extends StatelessWidget {
 
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 20.h),
-      // No decoration - seamless with background
       color: Colors.transparent,
       child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Status text above button
             Padding(
               padding: EdgeInsets.only(bottom: 12.h),
               child: ThemeText(
@@ -690,11 +646,9 @@ class VoiceDialogView extends StatelessWidget {
                 textColor: ColorConst.colorDCDCDC60,
               ),
             ),
-            // Main control button with outer ring
             Stack(
               alignment: Alignment.center,
               children: [
-                // Outer glow ring when listening
                 if (isListening)
                   Container(
                     width: 88.sp,
@@ -707,7 +661,6 @@ class VoiceDialogView extends StatelessWidget {
                       ),
                     ),
                   ),
-                // Main button
                 GestureDetector(
                   onTap: controller.togglePause,
                   child: Container(
@@ -752,11 +705,6 @@ class VoiceDialogView extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// HELPER WIDGETS - OPTIMIZED FOR PERFORMANCE
-// =============================================================================
-
-/// Simple pulsing dot - uses AnimatedContainer for efficiency
 class _PulsingDot extends StatelessWidget {
   final Color color;
   final bool shouldPulse;
@@ -779,7 +727,6 @@ class _PulsingDot extends StatelessWidget {
   }
 }
 
-/// Simple typing indicator - static dots with opacity
 class _TypingIndicator extends StatelessWidget {
   const _TypingIndicator();
 
@@ -810,7 +757,6 @@ class _TypingIndicator extends StatelessWidget {
   }
 }
 
-/// Simple speaking indicator - static bars
 class _SpeakingIndicator extends StatelessWidget {
   const _SpeakingIndicator();
 
@@ -841,7 +787,6 @@ class _SpeakingIndicator extends StatelessWidget {
   }
 }
 
-/// Lottie audio waveform animation
 class _AudioWaveform extends StatelessWidget {
   final RxDouble audioLevel;
 
@@ -859,7 +804,6 @@ class _AudioWaveform extends StatelessWidget {
       repeat: true,
       frameBuilder: (context, child, composition) {
         if (composition == null) {
-          // Show loading indicator while Lottie loads
           return Center(
             child: SizedBox(
               width: 24.sp,
@@ -874,14 +818,12 @@ class _AudioWaveform extends StatelessWidget {
         return child;
       },
       errorBuilder: (context, error, stackTrace) {
-        // Fallback to simple bars if Lottie fails to load
         return _SimpleFallbackWaveform();
       },
     );
   }
 }
 
-/// Simple fallback waveform if Lottie fails
 class _SimpleFallbackWaveform extends StatelessWidget {
   const _SimpleFallbackWaveform();
 
