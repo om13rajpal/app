@@ -66,7 +66,8 @@ dependencies:
   pinput: ^5.0.2
   country_picker: ^2.0.27
 
-  # Voice assistant - OpenAI Real-Time API
+  # Voice assistant - Backend integration
+  http: ^1.2.0
   flutter_sound: ^9.10.5
   web_socket_channel: ^2.4.0
   waveform_flutter: ^1.2.0

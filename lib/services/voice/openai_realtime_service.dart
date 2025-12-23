@@ -1,76 +1,67 @@
-/// OpenAI Real-Time API WebSocket Service
+/// Voice Realtime Service via Python Backend
 ///
-/// This service manages the WebSocket connection to OpenAI's GPT Real-Time API
-/// for low-latency voice conversations. It handles:
-/// - WebSocket connection lifecycle
-/// - Session configuration
-/// - Audio streaming (input/output)
-/// - Server-side Voice Activity Detection (VAD)
-/// - Interruption handling (barge-in)
+/// This service manages the WebSocket connection to the Python FastAPI backend
+/// which bridges to OpenAI's GPT Real-Time API for low-latency voice conversations.
 ///
-/// The Real-Time API uses PCM 16-bit audio at 24kHz sample rate.
+/// The backend handles:
+/// - Session management and authentication
+/// - OpenAI API connection and configuration
+/// - Audio transcription and response streaming
+/// - User context (location, vessels, preferences)
+///
+/// The app sends PCM 16-bit audio at 24kHz sample rate.
 ///
 /// Usage:
 /// ```dart
 /// final service = OpenAIRealtimeService();
-/// await service.connect(apiKey);
+/// await service.connect();
 /// service.sendAudioChunk(audioData);
 /// service.audioOutputStream.listen((audio) => playAudio(audio));
 /// ```
-///
-/// Reference: https://platform.openai.com/docs/api-reference/realtime
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'backend_service.dart';
 import 'realtime_events.dart';
 
-/// Service for managing OpenAI Real-Time API WebSocket connections.
+/// Service for managing voice conversations via the Python backend.
 ///
 /// This is a GetX service that can be registered globally and accessed
 /// throughout the application. It provides:
-/// - Connection management
+/// - Session creation via backend API
+/// - WebSocket connection management
 /// - Event streaming
 /// - Audio I/O
-/// - Session configuration
 ///
 /// The service emits events through [eventStream] and audio through
 /// [audioOutputStream] for the controller to handle.
 ///
 /// ## Mock Mode
-/// Set [useMockMode] to `true` to test the UI without an API key.
+/// Set [useMockMode] to `true` to test the UI without a backend connection.
 /// This simulates the Real-Time API responses for development testing.
 class OpenAIRealtimeService extends GetxService {
   // ===========================================================================
   // CONSTANTS
   // ===========================================================================
 
-  /// The WebSocket URL for OpenAI Real-Time API
-  static const String _wsUrl = 'wss://api.openai.com/v1/realtime';
-
-  /// The model to use for real-time conversations
-  /// Using the GA release model for production stability
-  static const String _model = 'gpt-4o-realtime-preview-2024-12-17';
-
-  /// API key loaded from .env file
-  /// Create a .env file in the project root with: OPENAI_API_KEY=your_key_here
-  static String get _devApiKey => dotenv.env['OPENAI_API_KEY'] ?? '';
-
-  /// **MOCK MODE** - Set to `true` to test without an API key
+  /// **MOCK MODE** - Set to `true` to test without a backend
   /// This simulates the Real-Time API for UI testing purposes.
-  /// Set to `false` when you have a valid API key for real conversations.
+  /// Set to `false` when you have the Python backend running.
   static const bool useMockMode = false;
 
   // ===========================================================================
   // PRIVATE PROPERTIES
   // ===========================================================================
+
+  /// Backend service for session management
+  BackendService? _backendService;
 
   /// The WebSocket channel for real-time communication
   WebSocketChannel? _channel;
@@ -84,11 +75,8 @@ class OpenAIRealtimeService extends GetxService {
   /// Timer for connection health checks (ping/pong)
   Timer? _pingTimer;
 
-  /// Current session configuration
-  VoiceSessionConfig? _sessionConfig;
-
-  /// Stored API key for reconnection
-  String? _storedApiKey;
+  /// Current session token
+  String? _sessionToken;
 
   /// Number of reconnection attempts
   int _reconnectAttempts = 0;
@@ -98,6 +86,15 @@ class OpenAIRealtimeService extends GetxService {
 
   /// Whether there's an active response being generated
   bool _isResponseActive = false;
+
+  /// User's auth token for external APIs
+  String? _authToken;
+
+  /// User's current location
+  String? _userLocation;
+
+  /// Coordinates for weather data
+  List<List<double>>? _coordinates;
 
   // ===========================================================================
   // REACTIVE PROPERTIES
@@ -109,7 +106,7 @@ class OpenAIRealtimeService extends GetxService {
   /// Whether the connection is currently active
   bool get isConnected => connectionState.value == ConnectionState.connected;
 
-  /// Whether the session has been configured (received session.updated)
+  /// Whether the session has been configured (received ready event)
   final RxBool isSessionConfigured = false.obs;
 
   // ===========================================================================
@@ -124,13 +121,12 @@ class OpenAIRealtimeService extends GetxService {
   final StreamController<Uint8List> _audioOutputController =
       StreamController<Uint8List>.broadcast();
 
-  /// Stream of parsed events from the Real-Time API
+  /// Stream of parsed events from the backend
   ///
   /// Subscribe to this stream to receive all events including:
-  /// - session.created
-  /// - input_audio_buffer.speech_started/stopped
-  /// - response.audio.delta
-  /// - response.done
+  /// - ready
+  /// - transcript (user and assistant)
+  /// - status
   /// - error
   Stream<RealtimeEvent> get eventStream => _eventController.stream;
 
@@ -144,33 +140,31 @@ class OpenAIRealtimeService extends GetxService {
   // CONNECTION MANAGEMENT
   // ===========================================================================
 
-  /// Establishes a WebSocket connection to the OpenAI Real-Time API.
+  /// Establishes a connection to the Python backend via WebSocket.
   ///
   /// This method:
-  /// 1. Creates a WebSocket connection with proper authentication headers
-  /// 2. Sets up message handling
-  /// 3. Configures the session with the provided settings
-  /// 4. Starts connection health monitoring
+  /// 1. Creates a session via the backend API
+  /// 2. Connects to the WebSocket with the session token
+  /// 3. Waits for the 'ready' event from the backend
   ///
-  /// [apiKey] - Your OpenAI API key (uses dev key if null)
-  /// [config] - Session configuration (uses maritime safety defaults if null)
+  /// [config] - Optional session configuration (used for mock mode only)
+  /// [authToken] - Auth token for external APIs (weather, vessels)
+  /// [userLocation] - User's current location name
+  /// [coordinates] - Coordinates for weather data
   ///
   /// Returns true if connection was successful, false otherwise.
-  ///
-  /// Example:
-  /// ```dart
-  /// final success = await service.connect(
-  ///   'sk-xxx',
-  ///   config: VoiceSessionConfig.maritimeSafety(),
-  /// );
-  /// ```
-  Future<bool> connect({String? apiKey, VoiceSessionConfig? config}) async {
+  Future<bool> connect({
+    VoiceSessionConfig? config,
+    String? authToken,
+    String? userLocation,
+    List<List<double>>? coordinates,
+  }) async {
     // Don't connect if already connected
     if (isConnected) {
       return true;
     }
 
-    // Use mock mode for testing without API key
+    // Use mock mode for testing without backend
     if (useMockMode) {
       return _connectMock(config);
     }
@@ -178,31 +172,59 @@ class OpenAIRealtimeService extends GetxService {
     try {
       connectionState.value = ConnectionState.connecting;
 
-      // Use provided config or maritime safety defaults
-      _sessionConfig = config ?? VoiceSessionConfig.maritimeSafety();
+      // Store user context
+      _authToken = authToken;
+      _userLocation = userLocation;
+      _coordinates = coordinates;
 
-      // Use provided API key or development key, and store for reconnection
-      final key = apiKey ?? _devApiKey;
-      _storedApiKey = key;
+      // Get or create backend service
+      if (!Get.isRegistered<BackendService>()) {
+        Get.put<BackendService>(BackendService());
+      }
+      _backendService = Get.find<BackendService>();
 
-      // Build the WebSocket URI with model parameter
-      final uri = Uri.parse('$_wsUrl?model=$_model');
+      // Check backend health first
+      // ignore: avoid_print
+      print('Checking backend health...');
+      final isHealthy = await _backendService!.checkHealth();
+      if (!isHealthy) {
+        // ignore: avoid_print
+        print('Backend is not available');
+        connectionState.value = ConnectionState.error;
+        _eventController.addError('Backend is not available. Please check the connection.');
+        return false;
+      }
+      // ignore: avoid_print
+      print('Backend is healthy');
 
-      // Create WebSocket connection with authentication
-      // The OpenAI Real-Time API uses a custom WebSocket subprotocol for auth
-      _channel = WebSocketChannel.connect(
-        uri,
-        protocols: [
-          'realtime',
-          'openai-insecure-api-key.$key',
-          'openai-beta.realtime-v1',
-        ],
+      // Create session
+      // ignore: avoid_print
+      print('Creating session...');
+      final sessionRequest = SessionCreateRequest(
+        authToken: _authToken,
+        userLocation: _userLocation,
+        coordinates: _coordinates,
       );
+
+      final sessionResponse = await _backendService!.createSession(
+        request: sessionRequest,
+      );
+      _sessionToken = sessionResponse.token;
+      // ignore: avoid_print
+      print('Session created: ${sessionResponse.conversationId}');
+
+      // Build WebSocket URL
+      final wsUrl = _backendService!.getWebSocketUrl(_sessionToken!);
+      // ignore: avoid_print
+      print('Connecting to WebSocket: $wsUrl');
+
+      // Create WebSocket connection
+      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
 
       // Wait for the connection to be established
       await _channel!.ready;
       // ignore: avoid_print
-      print('✅ WebSocket connection ready');
+      print('WebSocket connection ready');
 
       // Set up message handling
       _setupMessageHandling();
@@ -210,37 +232,31 @@ class OpenAIRealtimeService extends GetxService {
       // Start ping/pong for connection health
       _startPingTimer();
 
-      // Configure the session after connection
-      await _configureSession();
-      // ignore: avoid_print
-      print('✅ Session configuration sent');
-
       connectionState.value = ConnectionState.connected;
-      _reconnectAttempts = 0; // Reset on successful connection
-      _audioChunksSent = 0; // Reset chunk counter
-      _isResponseActive = false; // Reset response tracking
-      isSessionConfigured.value = false; // Will be set true when session.updated received
+      _reconnectAttempts = 0;
+      _audioChunksSent = 0;
+      _isResponseActive = false;
+      isSessionConfigured.value = false;
 
       // ignore: avoid_print
-      print('✅ Connection state set to connected (isConnected: $isConnected)');
+      print('Connection state set to connected');
       // ignore: avoid_print
-      print('⏳ Waiting for session.updated event to confirm VAD configuration...');
+      print('Waiting for ready event from backend...');
 
       return true;
     } catch (e) {
       connectionState.value = ConnectionState.error;
       _eventController.addError(e);
 
-      // Log error for debugging
       // ignore: avoid_print
-      print('OpenAI Real-Time API connection error: $e');
+      print('Connection error: $e');
 
       return false;
     }
   }
 
   // ===========================================================================
-  // MOCK MODE - For testing without API key
+  // MOCK MODE - For testing without backend
   // ===========================================================================
 
   /// Timer for simulating mock responses
@@ -263,7 +279,7 @@ class OpenAIRealtimeService extends GetxService {
     'What safety equipment should I have on my vessel?',
   ];
 
-  /// Current mock phrase being "spoken" (stores user's real transcription)
+  /// Current mock phrase being "spoken"
   String _currentMockPhrase = '';
 
   /// Fixed mock AI response
@@ -274,80 +290,58 @@ class OpenAIRealtimeService extends GetxService {
       "anchor and line, and a throwable flotation device. "
       "Would you like more details about any of these items?";
 
-  /// Starts mock listening mode - call this when user taps mic in mock mode.
-  /// Note: This is no longer used when using real speech recognition.
+  /// Starts mock listening mode
   void startMockListening() {
-    // Simulate speech started event
     _eventController.add(RealtimeEvent.fromJson({
       'type': 'input_audio_buffer.speech_started',
     }));
   }
 
   /// Sends a user message with real transcription and triggers mock AI response.
-  ///
-  /// This is used when in mock mode with real speech recognition:
-  /// the user's actual speech is transcribed, and this method receives
-  /// that transcription to trigger a mock AI response.
-  ///
-  /// [userMessage] - The user's actual speech transcription
   void sendMockUserMessage(String userMessage) {
-    // Store the user's message
     _currentMockPhrase = userMessage;
 
-    // Simulate transcription complete
     _eventController.add(RealtimeEvent.fromJson({
       'type': 'conversation.item.input_audio_transcription.completed',
       'transcript': userMessage,
     }));
 
-    // Trigger the mock AI response
     _triggerMockAIResponse(userMessage);
   }
 
-  /// Triggers a mock AI response based on the user's message.
-  ///
-  /// [userMessage] - The user's transcribed message
   void _triggerMockAIResponse(String userMessage) {
-    // Simulate response.created
     Future.delayed(const Duration(milliseconds: 300), () {
       _eventController.add(RealtimeEvent.fromJson({
         'type': 'response.created',
       }));
     });
 
-    // Generate contextual response based on user message
     final mockResponse = _generateMockResponse(userMessage);
-
     final words = mockResponse.split(' ');
     int wordIndex = 0;
 
-    // Start streaming the response after a delay
     Future.delayed(const Duration(milliseconds: 500), () {
       _mockResponseTimer = Timer.periodic(const Duration(milliseconds: 80), (timer) {
         if (wordIndex < words.length) {
-          // Send transcript delta
           _eventController.add(RealtimeEvent.fromJson({
             'type': 'response.audio_transcript.delta',
             'delta': '${words[wordIndex]} ',
           }));
 
-          // Send fake audio delta (empty for mock)
           _eventController.add(RealtimeEvent.fromJson({
             'type': 'response.audio.delta',
             'item_id': 'mock_item_${_uuid.v4()}',
-            'delta': '', // Empty audio in mock mode
+            'delta': '',
           }));
 
           wordIndex++;
         } else {
           timer.cancel();
 
-          // Send response.audio.done
           _eventController.add(RealtimeEvent.fromJson({
             'type': 'response.audio.done',
           }));
 
-          // Send response.done
           Future.delayed(const Duration(milliseconds: 100), () {
             _eventController.add(RealtimeEvent.fromJson({
               'type': 'response.done',
@@ -358,13 +352,9 @@ class OpenAIRealtimeService extends GetxService {
     });
   }
 
-  /// Generates a contextual mock response based on the user's message.
-  ///
-  /// [userMessage] - The user's transcribed message
   String _generateMockResponse(String userMessage) {
     final lowerMessage = userMessage.toLowerCase();
 
-    // Check for keywords and generate appropriate responses
     if (lowerMessage.contains('weather') || lowerMessage.contains('condition')) {
       return "Based on current conditions, the weather looks favorable for sailing today. "
           "Wind speeds are moderate at 10-15 knots from the southwest. "
@@ -374,10 +364,7 @@ class OpenAIRealtimeService extends GetxService {
           "State your vessel name, position, nature of distress, and number of people aboard. "
           "Activate your EPIRB if available. Stay calm and await rescue instructions.";
     } else if (lowerMessage.contains('safety') || lowerMessage.contains('equipment')) {
-      return "Essential safety equipment includes: life jackets for all passengers, "
-          "fire extinguisher, first aid kit, flares and distress signals, VHF radio, "
-          "navigation lights, anchor and line, and a throwable flotation device. "
-          "Would you like more details about any of these items?";
+      return _fixedMockResponse;
     } else if (lowerMessage.contains('navigation') || lowerMessage.contains('route')) {
       return "For safe navigation, always file a float plan with someone onshore. "
           "Check charts for hazards, maintain proper lookout, and follow right-of-way rules. "
@@ -393,15 +380,12 @@ class OpenAIRealtimeService extends GetxService {
     }
   }
 
-  /// Simulates a connection for testing purposes.
   Future<bool> _connectMock(VoiceSessionConfig? config) async {
     // ignore: avoid_print
-    print('🎭 MOCK MODE: Simulating Real-Time API connection');
+    print('MOCK MODE: Simulating backend connection');
 
     connectionState.value = ConnectionState.connecting;
-    _sessionConfig = config ?? VoiceSessionConfig.maritimeSafety();
 
-    // Simulate connection delay
     await Future.delayed(const Duration(milliseconds: 500));
 
     // Simulate session.created event
@@ -411,42 +395,41 @@ class OpenAIRealtimeService extends GetxService {
     }));
 
     connectionState.value = ConnectionState.connected;
+    isSessionConfigured.value = true;
+
+    // Simulate ready event
+    _eventController.add(RealtimeEvent.fromJson({
+      'type': 'ready',
+    }));
 
     // ignore: avoid_print
-    print('🎭 MOCK MODE: Connected successfully');
+    print('MOCK MODE: Connected successfully');
 
     return true;
   }
 
-  /// Simulates sending audio in mock mode.
   void _sendAudioMock(Uint8List audioData) {
     _mockAudioChunkCount++;
 
-    // After receiving some audio chunks, simulate speech detection and start streaming transcription
     if (_mockAudioChunkCount == 3) {
       _eventController.add(RealtimeEvent.fromJson({
         'type': 'input_audio_buffer.speech_started',
       }));
 
-      // Start streaming the user's transcription
       _startMockUserTranscription();
     }
   }
 
-  /// Starts streaming mock user transcription word by word.
   void _startMockUserTranscription() {
-    // Pick a random phrase
     _currentMockPhrase = _mockUserPhrases[
         DateTime.now().millisecondsSinceEpoch % _mockUserPhrases.length];
     final words = _currentMockPhrase.split(' ');
     _mockUserWordIndex = 0;
 
-    // Stream words one by one
     _mockTranscriptionTimer = Timer.periodic(
       const Duration(milliseconds: 200),
       (timer) {
         if (_mockUserWordIndex < words.length) {
-          // Send partial transcription event
           final partialText = words.sublist(0, _mockUserWordIndex + 1).join(' ');
           _eventController.add(RealtimeEvent.fromJson({
             'type': 'input_audio_buffer.transcription.partial',
@@ -460,26 +443,19 @@ class OpenAIRealtimeService extends GetxService {
     );
   }
 
-  /// Stops mock user transcription.
   void _stopMockUserTranscription() {
     _mockTranscriptionTimer?.cancel();
     _mockTranscriptionTimer = null;
   }
 
-  /// Simulates the end of user speech and AI response in mock mode.
   void _simulateMockResponse() {
-    // Stop user transcription streaming
     _stopMockUserTranscription();
-
-    // Reset chunk counter
     _mockAudioChunkCount = 0;
 
-    // Simulate speech stopped
     _eventController.add(RealtimeEvent.fromJson({
       'type': 'input_audio_buffer.speech_stopped',
     }));
 
-    // Simulate transcription complete with the phrase that was being streamed
     final finalTranscript = _currentMockPhrase.isNotEmpty
         ? _currentMockPhrase
         : 'Hello, I need help with maritime safety.';
@@ -491,44 +467,37 @@ class OpenAIRealtimeService extends GetxService {
       }));
     });
 
-    // Simulate response.created
     Future.delayed(const Duration(milliseconds: 500), () {
       _eventController.add(RealtimeEvent.fromJson({
         'type': 'response.created',
       }));
     });
 
-    // Use the fixed mock response for consistent testing
     final mockResponse = _fixedMockResponse;
-
     final words = mockResponse.split(' ');
     int wordIndex = 0;
 
     _mockResponseTimer = Timer.periodic(const Duration(milliseconds: 80), (timer) {
       if (wordIndex < words.length) {
-        // Send transcript delta
         _eventController.add(RealtimeEvent.fromJson({
           'type': 'response.audio_transcript.delta',
           'delta': '${words[wordIndex]} ',
         }));
 
-        // Send fake audio delta (empty for mock)
         _eventController.add(RealtimeEvent.fromJson({
           'type': 'response.audio.delta',
           'item_id': 'mock_item_${_uuid.v4()}',
-          'delta': '', // Empty audio in mock mode
+          'delta': '',
         }));
 
         wordIndex++;
       } else {
         timer.cancel();
 
-        // Send response.audio.done
         _eventController.add(RealtimeEvent.fromJson({
           'type': 'response.audio.done',
         }));
 
-        // Send response.done
         Future.delayed(const Duration(milliseconds: 100), () {
           _eventController.add(RealtimeEvent.fromJson({
             'type': 'response.done',
@@ -538,7 +507,10 @@ class OpenAIRealtimeService extends GetxService {
     });
   }
 
-  /// Sets up the message handling pipeline for incoming WebSocket messages.
+  // ===========================================================================
+  // MESSAGE HANDLING
+  // ===========================================================================
+
   void _setupMessageHandling() {
     _messageSubscription = _channel?.stream.listen(
       _handleMessage,
@@ -547,173 +519,193 @@ class OpenAIRealtimeService extends GetxService {
     );
   }
 
-  /// Configures the session with VAD, voice, and modality settings.
-  ///
-  /// This is called automatically after connection is established.
-  /// The session.update event configures how the AI will behave.
-  Future<void> _configureSession() async {
-    if (_sessionConfig == null) {
-      // ignore: avoid_print
-      print('⚠️ No session config provided, using defaults');
-      return;
-    }
-
-    final sessionConfig = _sessionConfig!.toSessionUpdate();
-
-    // ignore: avoid_print
-    print('📋 Configuring session with:');
-    // ignore: avoid_print
-    print('   - modalities: ${sessionConfig['modalities']}');
-    // ignore: avoid_print
-    print('   - voice: ${sessionConfig['voice']}');
-    // ignore: avoid_print
-    print('   - input_audio_format: ${sessionConfig['input_audio_format']}');
-    // ignore: avoid_print
-    print('   - turn_detection: ${sessionConfig['turn_detection']}');
-
-    final sessionUpdate = {
-      'type': 'session.update',
-      'session': sessionConfig,
-    };
-
-    _sendEvent(sessionUpdate);
-    // ignore: avoid_print
-    print('📤 Session update event sent');
-  }
-
-  /// Starts a periodic timer for connection health monitoring.
-  ///
-  /// Note: WebSocket ping/pong is handled at the protocol level automatically.
-  /// This timer is kept for potential future use (e.g., checking connection state).
   void _startPingTimer() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      // Connection health is monitored through the WebSocket protocol itself
-      // No need to send explicit ping events - they're not supported by the API
       if (!isConnected && connectionState.value == ConnectionState.connected) {
-        // Connection was lost unexpectedly, update state
         connectionState.value = ConnectionState.disconnected;
       }
     });
   }
 
-  // ===========================================================================
-  // MESSAGE HANDLING
-  // ===========================================================================
-
-  /// Handles incoming WebSocket messages.
+  /// Handles incoming WebSocket messages from the Python backend.
   ///
-  /// This method:
-  /// 1. Parses the JSON message
-  /// 2. Creates a typed RealtimeEvent
-  /// 3. Broadcasts to the event stream
-  /// 4. Handles audio data specially for playback
+  /// Backend message types:
+  /// - ready: Session is configured and ready
+  /// - audio: Base64-encoded PCM audio chunk
+  /// - audio_done: Audio streaming complete
+  /// - transcript: User or assistant transcription
+  /// - transcript_delta: Streaming transcript chunk
+  /// - status: Connection status update
+  /// - transcription_failed: Transcription error (non-critical)
+  /// - error: Error message
   void _handleMessage(dynamic message) {
     try {
       final Map<String, dynamic> data = jsonDecode(message as String);
       final String type = data['type'] ?? '';
 
-      // Parse into typed event and broadcast
-      final event = RealtimeEvent.fromJson(data);
-      _eventController.add(event);
+      // Log all events
+      // ignore: avoid_print
+      print('Backend event: $type');
 
-      // Handle audio delta events specifically for streaming playback
-      // These contain base64-encoded PCM audio chunks
-      if (type == 'response.audio.delta') {
-        final audioBase64 = data['delta'] as String?;
-        if (audioBase64 != null) {
-          final audioBytes = base64Decode(audioBase64);
-          _audioOutputController.add(Uint8List.fromList(audioBytes));
-        }
+      // Convert backend events to RealtimeEvent format for controller compatibility
+      switch (type) {
+        case 'ready':
+          // Backend session is ready
+          isSessionConfigured.value = true;
+          // ignore: avoid_print
+          print('Session configured and ready');
+          _eventController.add(RealtimeEvent.fromJson({
+            'type': 'session.updated',
+          }));
+          break;
+
+        case 'audio':
+          // Audio chunk from AI response
+          final audioBase64 = data['data'] as String?;
+          if (audioBase64 != null && audioBase64.isNotEmpty) {
+            final audioBytes = base64Decode(audioBase64);
+            _audioOutputController.add(Uint8List.fromList(audioBytes));
+
+            // Also emit as response.audio.delta for controller compatibility
+            _eventController.add(RealtimeEvent.fromJson({
+              'type': 'response.audio.delta',
+              'delta': audioBase64,
+            }));
+          }
+          break;
+
+        case 'audio_done':
+          // Audio streaming complete
+          // ignore: avoid_print
+          print('AI audio streaming complete');
+          _eventController.add(RealtimeEvent.fromJson({
+            'type': 'response.audio.done',
+          }));
+          break;
+
+        case 'transcript':
+          // Complete transcription (user or assistant)
+          final text = data['text'] as String? ?? '';
+          final role = data['role'] as String? ?? 'user';
+          // ignore: avoid_print
+          print('$role transcript: $text');
+
+          if (role == 'user') {
+            _eventController.add(RealtimeEvent.fromJson({
+              'type': 'conversation.item.input_audio_transcription.completed',
+              'transcript': text,
+            }));
+          } else {
+            // Assistant transcript done
+            _eventController.add(RealtimeEvent.fromJson({
+              'type': 'response.audio_transcript.done',
+              'transcript': text,
+            }));
+          }
+          break;
+
+        case 'transcript_delta':
+          // Streaming transcript chunk
+          final delta = data['delta'] as String? ?? '';
+          final role = data['role'] as String? ?? 'assistant';
+
+          _eventController.add(RealtimeEvent.fromJson({
+            'type': 'response.audio_transcript.delta',
+            'delta': delta,
+          }));
+          break;
+
+        case 'status':
+          // Status update from backend
+          final status = data['status'] as String? ?? '';
+          // ignore: avoid_print
+          print('Status: $status');
+
+          switch (status) {
+            case 'speaking':
+              _isResponseActive = true;
+              _eventController.add(RealtimeEvent.fromJson({
+                'type': 'response.created',
+              }));
+              break;
+            case 'listening':
+              _isResponseActive = false;
+              _eventController.add(RealtimeEvent.fromJson({
+                'type': 'response.done',
+              }));
+              break;
+            case 'user_speaking':
+              _eventController.add(RealtimeEvent.fromJson({
+                'type': 'input_audio_buffer.speech_started',
+              }));
+              break;
+            case 'processing':
+              _eventController.add(RealtimeEvent.fromJson({
+                'type': 'input_audio_buffer.speech_stopped',
+              }));
+              break;
+          }
+          break;
+
+        case 'transcription_failed':
+          // Non-critical transcription error
+          final errorMsg = data['message'] as String? ?? 'Transcription failed';
+          // ignore: avoid_print
+          print('Transcription failed (non-critical): $errorMsg');
+          break;
+
+        case 'error':
+          // Error from backend
+          final errorMsg = data['message'] as String? ?? 'Unknown error';
+          final errorCode = data['code'] as String? ?? 'unknown';
+          // ignore: avoid_print
+          print('Error: $errorCode - $errorMsg');
+
+          // Don't break for recoverable errors
+          if (errorCode == 'response_cancel_not_active' ||
+              errorCode == 'conversation_already_exists') {
+            return;
+          }
+
+          _eventController.add(RealtimeEvent.fromJson({
+            'type': 'error',
+            'error': {'message': errorMsg, 'code': errorCode},
+          }));
+          break;
+
+        default:
+          // Unknown event type - log for debugging
+          // ignore: avoid_print
+          print('Unknown backend event: $type');
       }
-
-      // Log important events for debugging (remove in production)
-      _logEvent(type, data);
     } catch (e) {
-      // Log parsing errors but don't crash
       // ignore: avoid_print
-      print('Error parsing Real-Time API message: $e');
+      print('Error parsing backend message: $e');
     }
   }
 
-  /// Logs important events for debugging purposes.
-  void _logEvent(String type, Map<String, dynamic> data) {
-    // Log ALL events for debugging (can be reduced later)
-    // ignore: avoid_print
-    print('📡 Real-Time API Event: $type');
-
-    // Track session configuration
-    if (type == 'session.created') {
-      // ignore: avoid_print
-      print('✅ Session created - waiting for configuration...');
-    } else if (type == 'session.updated') {
-      isSessionConfigured.value = true;
-      // ignore: avoid_print
-      print('✅ Session configured successfully! VAD should now be active.');
-      // Log the turn_detection config from the response
-      final session = data['session'] as Map<String, dynamic>?;
-      if (session != null) {
-        final turnDetection = session['turn_detection'];
-        // ignore: avoid_print
-        print('   Turn detection: $turnDetection');
-      }
-    } else if (type == 'response.created') {
-      _isResponseActive = true;
-      // ignore: avoid_print
-      print('🚀 Response started - cancel is now available');
-    } else if (type == 'response.done' || type == 'response.cancelled') {
-      _isResponseActive = false;
-      // ignore: avoid_print
-      print('✅ Response ended - cancel no longer needed');
-    }
-
-    // Log additional details for important events
-    if (type == 'error') {
-      // ignore: avoid_print
-      print('❌ Error details: ${data['error']}');
-    } else if (type == 'response.audio_transcript.delta') {
-      final delta = data['delta'] ?? '';
-      // ignore: avoid_print
-      print('📝 Transcript delta: $delta');
-    } else if (type == 'conversation.item.input_audio_transcription.completed') {
-      final transcript = data['transcript'] ?? '';
-      // ignore: avoid_print
-      print('🎙️ User transcription: $transcript');
-    } else if (type == 'input_audio_buffer.speech_started') {
-      // ignore: avoid_print
-      print('🎤 VAD detected speech start!');
-    } else if (type == 'input_audio_buffer.speech_stopped') {
-      // ignore: avoid_print
-      print('🎤 VAD detected speech end!');
-    }
-  }
-
-  /// Handles WebSocket errors.
   void _handleError(dynamic error) {
     connectionState.value = ConnectionState.error;
     _eventController.addError(error);
 
     // ignore: avoid_print
-    print('Real-Time API WebSocket error: $error');
+    print('WebSocket error: $error');
 
-    // Attempt reconnection
     _attemptReconnect();
   }
 
-  /// Handles WebSocket disconnection.
   void _handleDisconnect() {
     connectionState.value = ConnectionState.disconnected;
 
     // ignore: avoid_print
-    print('Real-Time API WebSocket disconnected');
+    print('WebSocket disconnected');
 
-    // Attempt reconnection if not intentionally disconnected
     if (_reconnectAttempts < _maxReconnectAttempts) {
       _attemptReconnect();
     }
   }
 
-  /// Attempts to reconnect to the API with exponential backoff.
   Future<void> _attemptReconnect() async {
     if (_reconnectAttempts >= _maxReconnectAttempts) {
       // ignore: avoid_print
@@ -730,8 +722,11 @@ class OpenAIRealtimeService extends GetxService {
     await Future.delayed(delay);
 
     if (connectionState.value != ConnectionState.connected) {
-      // Use stored API key and config for reconnection
-      await connect(apiKey: _storedApiKey, config: _sessionConfig);
+      await connect(
+        authToken: _authToken,
+        userLocation: _userLocation,
+        coordinates: _coordinates,
+      );
     }
   }
 
@@ -739,25 +734,19 @@ class OpenAIRealtimeService extends GetxService {
   // AUDIO INPUT
   // ===========================================================================
 
-  /// Counter for tracking audio chunks sent (for debugging)
   int _audioChunksSent = 0;
 
-  /// Sends an audio chunk to the Real-Time API.
+  /// Sends an audio chunk to the backend.
   ///
   /// The audio should be PCM 16-bit at 24kHz sample rate, mono channel.
   /// The data is base64-encoded before transmission.
-  ///
-  /// [audioData] - Raw PCM audio bytes
-  ///
-  /// This method is typically called continuously while the user is speaking.
   void sendAudioChunk(Uint8List audioData) {
     if (!isConnected) {
       // ignore: avoid_print
-      print('⚠️ sendAudioChunk: Not connected, skipping chunk');
+      print('sendAudioChunk: Not connected, skipping chunk');
       return;
     }
 
-    // Use mock mode if enabled
     if (useMockMode) {
       _sendAudioMock(audioData);
       return;
@@ -765,89 +754,71 @@ class OpenAIRealtimeService extends GetxService {
 
     _audioChunksSent++;
 
-    // Log every 50th chunk with audio level info
     if (_audioChunksSent % 50 == 0) {
-      // Calculate audio level from PCM data
       double maxLevel = 0;
       for (int i = 0; i < audioData.length - 1; i += 2) {
-        // Convert 2 bytes to signed 16-bit integer (little-endian)
         int sample = audioData[i] | (audioData[i + 1] << 8);
-        if (sample > 32767) sample -= 65536; // Convert to signed
+        if (sample > 32767) sample -= 65536;
         double level = sample.abs() / 32768.0;
         if (level > maxLevel) maxLevel = level;
       }
       // ignore: avoid_print
-      print('🎤 Audio chunk #$_audioChunksSent (${audioData.length} bytes, peak: ${(maxLevel * 100).toStringAsFixed(1)}%)');
+      print('Audio chunk #$_audioChunksSent (${audioData.length} bytes, peak: ${(maxLevel * 100).toStringAsFixed(1)}%)');
     }
 
     final base64Audio = base64Encode(audioData);
 
-    final event = {
-      'type': 'input_audio_buffer.append',
-      'audio': base64Audio,
-    };
+    // Send in backend format
+    final message = jsonEncode({
+      'type': 'audio',
+      'data': base64Audio,
+    });
 
-    _sendEvent(event);
+    _channel?.sink.add(message);
   }
 
-  /// Commits the audio buffer to signal end of speech (manual mode).
+  /// Commits the audio buffer to signal end of speech.
   ///
-  /// This is used when VAD is disabled and you want to manually control
-  /// when the user has finished speaking.
-  ///
-  /// Note: When using server-side VAD, this is handled automatically.
+  /// Note: With server-side VAD, this is typically not needed.
   void commitAudioBuffer() {
     if (!isConnected) return;
 
-    // In mock mode, simulate the response when audio is committed
     if (useMockMode) {
       _simulateMockResponse();
       return;
     }
 
-    _sendEvent({'type': 'input_audio_buffer.commit'});
+    final message = jsonEncode({'type': 'commit'});
+    _channel?.sink.add(message);
   }
 
   /// Clears the audio buffer.
-  ///
-  /// Use this to discard any audio that hasn't been processed yet,
-  /// for example when canceling the current input.
   void clearAudioBuffer() {
     if (!isConnected) return;
-    _sendEvent({'type': 'input_audio_buffer.clear'});
+
+    // Backend doesn't have a clear command, but we can cancel
+    // which effectively discards buffered audio
+    final message = jsonEncode({'type': 'cancel'});
+    _channel?.sink.add(message);
   }
 
   // ===========================================================================
   // RESPONSE CONTROL
   // ===========================================================================
 
-  /// Manually requests a response from the AI (manual mode).
+  /// Manually requests a response from the AI.
   ///
-  /// This is used when VAD is disabled and you want to manually trigger
-  /// the AI to generate a response.
-  ///
-  /// Note: When using server-side VAD with create_response=true,
-  /// responses are triggered automatically.
+  /// Note: With server-side VAD, responses are triggered automatically.
   void createResponse() {
     if (!isConnected) return;
 
-    _sendEvent({
-      'type': 'response.create',
-      'response': {
-        'modalities': ['text', 'audio'],
-      },
-    });
+    // Backend uses commit to trigger response
+    final message = jsonEncode({'type': 'commit'});
+    _channel?.sink.add(message);
   }
 
   /// Cancels the current response (interruption handling).
-  ///
-  /// Call this when the user starts speaking to interrupt the AI (barge-in).
-  /// This stops the AI from continuing to generate audio.
-  ///
-  /// Note: Only sends cancel if there's an active response to avoid
-  /// `response_cancel_not_active` errors from the API.
   void cancelResponse() {
-    // Cancel mock timer if in mock mode
     if (useMockMode) {
       _mockResponseTimer?.cancel();
       _mockResponseTimer = null;
@@ -856,65 +827,31 @@ class OpenAIRealtimeService extends GetxService {
 
     if (!isConnected) return;
 
-    // Only cancel if there's an active response to avoid API errors
     if (!_isResponseActive) {
       // ignore: avoid_print
-      print('ℹ️ cancelResponse: No active response to cancel, skipping');
+      print('cancelResponse: No active response to cancel');
       return;
     }
 
-    _sendEvent({'type': 'response.cancel'});
-    _isResponseActive = false; // Optimistically set to false
+    final message = jsonEncode({'type': 'cancel'});
+    _channel?.sink.add(message);
+    _isResponseActive = false;
   }
 
   /// Truncates the audio playback at a specific position.
   ///
-  /// This is used for accurate context tracking when the user interrupts.
-  /// It tells the API how much of the response audio was actually played.
-  ///
-  /// [itemId] - The ID of the conversation item being truncated
-  /// [contentIndex] - The index of the content part (usually 0)
-  /// [audioEndMs] - The position in milliseconds where playback stopped
+  /// Note: Backend handles this internally, this is a no-op for compatibility.
   void truncateResponse(String itemId, int contentIndex, int audioEndMs) {
-    if (!isConnected) return;
-
-    _sendEvent({
-      'type': 'conversation.item.truncate',
-      'item_id': itemId,
-      'content_index': contentIndex,
-      'audio_end_ms': audioEndMs,
-    });
+    // Backend handles truncation internally
+    // This method is kept for API compatibility
   }
 
   // ===========================================================================
   // UTILITY METHODS
   // ===========================================================================
 
-  /// Sends an event to the Real-Time API.
-  ///
-  /// Automatically adds a unique event_id if not present.
-  void _sendEvent(Map<String, dynamic> event) {
-    if (_channel == null) return;
-
-    // Add event_id if not present (helps with debugging and tracking)
-    if (!event.containsKey('event_id')) {
-      event['event_id'] = _uuid.v4();
-    }
-
-    try {
-      _channel!.sink.add(jsonEncode(event));
-    } catch (e) {
-      // ignore: avoid_print
-      print('Error sending event: $e');
-    }
-  }
-
-  /// Disconnects from the Real-Time API.
-  ///
-  /// This closes the WebSocket connection and cleans up resources.
-  /// Call this when the voice dialog is closed.
+  /// Disconnects from the backend.
   Future<void> disconnect() async {
-    // Cancel mock timer if active
     _mockResponseTimer?.cancel();
     _mockResponseTimer = null;
     _mockAudioChunkCount = 0;
@@ -925,27 +862,36 @@ class OpenAIRealtimeService extends GetxService {
     await _messageSubscription?.cancel();
     _messageSubscription = null;
 
+    // Send close message to backend
+    if (_channel != null) {
+      try {
+        _channel!.sink.add(jsonEncode({'type': 'close'}));
+      } catch (_) {}
+    }
+
     await _channel?.sink.close();
     _channel = null;
 
     _isResponseActive = false;
+    _sessionToken = null;
     connectionState.value = ConnectionState.disconnected;
+
+    // Clear backend session
+    _backendService?.clearSession();
   }
 
   /// Updates the session configuration.
   ///
-  /// This can be called to change the AI's behavior mid-session,
-  /// such as changing the system prompt or voice.
+  /// Note: Backend controls session config, this is a no-op for compatibility.
   Future<void> updateSession(VoiceSessionConfig config) async {
-    _sessionConfig = config;
-    await _configureSession();
+    // Backend controls session configuration
+    // This method is kept for API compatibility
   }
 
   // ===========================================================================
   // LIFECYCLE
   // ===========================================================================
 
-  /// Called when the service is closed (GetX lifecycle).
   @override
   void onClose() {
     disconnect();

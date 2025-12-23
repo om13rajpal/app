@@ -307,31 +307,86 @@ class VoiceDialogView extends StatelessWidget {
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
-        padding: EdgeInsets.all(32.sp),
+        padding: EdgeInsets.symmetric(horizontal: 40.w, vertical: 32.h),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.waves,
-              color: ColorConst.color5AD1D3.withOpacity(0.5),
-              size: 64.sp,
+            // Animated icon container with gradient glow
+            Container(
+              width: 100.sp,
+              height: 100.sp,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    ColorConst.color5AD1D3.withOpacity(0.15),
+                    ColorConst.color00FBFF.withOpacity(0.08),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: ColorConst.color5AD1D3.withOpacity(0.2),
+                    blurRadius: 40,
+                    spreadRadius: 8,
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.sailing_outlined,
+                color: ColorConst.color5AD1D3,
+                size: 48.sp,
+              ),
             ),
-            SizedBox(height: 16.h),
+            SizedBox(height: 32.h),
             ThemeText(
-              text: 'Hi! I\'m your maritime assistant.',
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
+              text: 'Your Maritime Assistant',
+              fontSize: 22,
+              fontWeight: FontWeight.w600,
               textAlign: TextAlign.center,
             ),
-            SizedBox(height: 8.h),
+            SizedBox(height: 12.h),
             ThemeText(
-              text: 'Just start speaking and I\'ll help you with weather, routes, and safety.',
-              fontSize: 14,
+              text: 'Start speaking to get help with weather forecasts, route planning, and safety information.',
+              fontSize: 15,
               textColor: ColorConst.colorDCDCDC80,
               textAlign: TextAlign.center,
             ),
+            SizedBox(height: 28.h),
+            // Hint chips
+            Wrap(
+              spacing: 8.w,
+              runSpacing: 8.h,
+              alignment: WrapAlignment.center,
+              children: [
+                _buildHintChip('Weather'),
+                _buildHintChip('Routes'),
+                _buildHintChip('Safety'),
+              ],
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildHintChip(String text) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+      decoration: BoxDecoration(
+        color: ColorConst.color5AD1D3.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: ColorConst.color5AD1D3.withOpacity(0.25),
+          width: 1,
+        ),
+      ),
+      child: ThemeText(
+        text: text,
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+        textColor: ColorConst.color5AD1D3,
       ),
     );
   }
@@ -429,29 +484,52 @@ class VoiceDialogView extends StatelessWidget {
 
   Widget _buildListeningIndicator(VoiceConversationController controller) {
     return Container(
-      margin: EdgeInsets.all(16.sp),
-      padding: EdgeInsets.symmetric(vertical: 20.h, horizontal: 24.w),
+      margin: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+      padding: EdgeInsets.symmetric(vertical: 28.h, horizontal: 28.w),
       decoration: BoxDecoration(
-        color: ColorConst.color091B2C,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: ColorConst.color5AD1D3.withOpacity(0.3),
-          width: 1,
+        gradient: LinearGradient(
+          colors: [
+            ColorConst.color091B2C,
+            ColorConst.color091B2C.withOpacity(0.95),
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
         ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: ColorConst.color5AD1D3.withOpacity(0.25),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: ColorConst.color5AD1D3.withOpacity(0.08),
+            blurRadius: 24,
+            spreadRadius: 0,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Waveform visualization
+          // Waveform visualization - larger and more prominent
           SizedBox(
-            height: 50.h,
+            height: 80.h,
             child: _AudioWaveform(audioLevel: controller.audioLevel),
           ),
-          SizedBox(height: 12.h),
-          ThemeText(
-            text: 'Listening for your voice...',
-            fontSize: 13,
-            textColor: ColorConst.colorDCDCDC60,
+          SizedBox(height: 16.h),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _PulsingDot(color: ColorConst.color5AD1D3, shouldPulse: true),
+              SizedBox(width: 10.w),
+              ThemeText(
+                text: 'Listening...',
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                textColor: ColorConst.colorDCDCDC80,
+              ),
+            ],
           ),
         ],
       ),
@@ -584,58 +662,88 @@ class VoiceDialogView extends StatelessWidget {
   Widget _buildBottomBar(VoiceConversationController controller) {
     final state = controller.dialogState.value;
     final isPaused = controller.isPaused.value;
+    final isListening = state == VoiceDialogState.listening && !isPaused;
 
     if (state == VoiceDialogState.initializing || state == VoiceDialogState.error) {
       return const SizedBox.shrink();
     }
 
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.h),
-      decoration: BoxDecoration(
-        color: ColorConst.color091B2C,
-        border: Border(
-          top: BorderSide(
-            color: ColorConst.color28333D,
-            width: 1,
-          ),
-        ),
-      ),
+      padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 20.h),
+      // No decoration - seamless with background
+      color: Colors.transparent,
       child: SafeArea(
         top: false,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // Pause/Resume button
-            GestureDetector(
-              onTap: controller.togglePause,
-              child: Container(
-                width: 64.sp,
-                height: 64.sp,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: isPaused
-                        ? [ColorConst.color5AD1D3, ColorConst.color00FBFF]
-                        : [ColorConst.colorDCDCDC60, ColorConst.colorDCDCDC40],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isPaused
-                          ? ColorConst.color5AD1D3.withOpacity(0.4)
-                          : Colors.transparent,
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Icon(
-                  isPaused ? Icons.mic : Icons.pause,
-                  color: ColorConst.white,
-                  size: 28.sp,
-                ),
+            // Status text above button
+            Padding(
+              padding: EdgeInsets.only(bottom: 12.h),
+              child: ThemeText(
+                text: isPaused
+                    ? 'Tap to resume listening'
+                    : isListening
+                        ? 'Listening actively'
+                        : 'Processing...',
+                fontSize: 12,
+                textColor: ColorConst.colorDCDCDC60,
               ),
+            ),
+            // Main control button with outer ring
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                // Outer glow ring when listening
+                if (isListening)
+                  Container(
+                    width: 88.sp,
+                    height: 88.sp,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: ColorConst.color5AD1D3.withOpacity(0.3),
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                // Main button
+                GestureDetector(
+                  onTap: controller.togglePause,
+                  child: Container(
+                    width: 72.sp,
+                    height: 72.sp,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: isPaused
+                            ? [ColorConst.color5AD1D3, ColorConst.color00FBFF]
+                            : isListening
+                                ? [ColorConst.color5AD1D3, ColorConst.color00FBFF]
+                                : [ColorConst.colorA56DFF, ColorConst.colorA56DFF.withOpacity(0.8)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: isPaused
+                              ? ColorConst.color5AD1D3.withOpacity(0.5)
+                              : isListening
+                                  ? ColorConst.color5AD1D3.withOpacity(0.4)
+                                  : ColorConst.colorA56DFF.withOpacity(0.3),
+                          blurRadius: 24,
+                          spreadRadius: 4,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      isPaused ? Icons.mic : Icons.pause_rounded,
+                      color: ColorConst.white,
+                      size: 32.sp,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -740,22 +848,35 @@ class _AudioWaveform extends StatelessWidget {
   const _AudioWaveform({required this.audioLevel});
 
   static const String _lottieUrl =
-      'https://lottie.host/f7183d5f-5c61-4728-a84c-7be0e5041349/lVQhwfEW4p.json';
+      'https://lottie.host/85e40b76-0c0e-45ae-a330-c436b197b24e/lDbtQSrqFQ.json';
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 60.h,
-      child: Lottie.network(
-        _lottieUrl,
-        fit: BoxFit.contain,
-        animate: true,
-        repeat: true,
-        errorBuilder: (context, error, stackTrace) {
-          // Fallback to simple bars if Lottie fails to load
-          return _SimpleFallbackWaveform();
-        },
-      ),
+    return Lottie.network(
+      _lottieUrl,
+      fit: BoxFit.contain,
+      animate: true,
+      repeat: true,
+      frameBuilder: (context, child, composition) {
+        if (composition == null) {
+          // Show loading indicator while Lottie loads
+          return Center(
+            child: SizedBox(
+              width: 24.sp,
+              height: 24.sp,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: ColorConst.color5AD1D3.withOpacity(0.5),
+              ),
+            ),
+          );
+        }
+        return child;
+      },
+      errorBuilder: (context, error, stackTrace) {
+        // Fallback to simple bars if Lottie fails to load
+        return _SimpleFallbackWaveform();
+      },
     );
   }
 }
