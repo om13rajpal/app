@@ -48,4 +48,8 @@ class ColorConst {
 
   static const Color colorDCDCDC = Color(0xFFDCDCDC);
   static const Color color2D2D2D = Color(0xFF2D2D2D);
+
+  // Additional colors for AI response widgets
+  static const Color colorFFB800 = Color(0xFFFFB800); // Warning/Caution yellow
+  static const Color colorFF6B00 = Color(0xFFFF6B00); // High risk orange
 }

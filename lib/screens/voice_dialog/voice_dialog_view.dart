@@ -9,9 +9,11 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
 
+import '../../data/models/ai_response_models.dart';
 import '../../services/voice/realtime_events.dart';
 import '../../services/voice/voice_conversation_controller.dart';
 import '../../utils/constants/color_constant.dart';
+import '../../widgets/ai_response_widgets.dart';
 import '../../widgets/theme_text.dart';
 
 /// Main voice dialog widget with continuous listening.
@@ -191,10 +193,45 @@ class VoiceDialogView extends StatelessWidget {
     return Column(
       children: [
         Expanded(
-          child: _buildConversationList(controller),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
+            child: Column(
+              children: [
+                // Show structured response if available
+                Obx(() {
+                  if (controller.hasStructuredData.value &&
+                      controller.currentStructuredResponse.value != null) {
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: 16.h),
+                      child: AIResponseWidget(
+                        response: controller.currentStructuredResponse.value!,
+                        onStartTrip: controller.onStartTrip,
+                        onViewOnMap: controller.onViewOnMap,
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                }),
+                // Regular conversation list
+                _buildConversationListContent(controller),
+              ],
+            ),
+          ),
         ),
         _buildCurrentInteraction(controller),
       ],
+    );
+  }
+
+  Widget _buildConversationListContent(VoiceConversationController controller) {
+    if (controller.conversationHistory.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    return Column(
+      children: controller.conversationHistory.reversed
+          .map((turn) => _buildChatBubble(turn))
+          .toList(),
     );
   }
 
@@ -261,23 +298,6 @@ class VoiceDialogView extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildConversationList(VoiceConversationController controller) {
-    if (controller.conversationHistory.isEmpty) {
-      return _buildEmptyState();
-    }
-
-    return ListView.builder(
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
-      reverse: true,
-      itemCount: controller.conversationHistory.length,
-      itemBuilder: (context, index) {
-        final reversedIndex = controller.conversationHistory.length - 1 - index;
-        final turn = controller.conversationHistory[reversedIndex];
-        return _buildChatBubble(turn);
-      },
     );
   }
 

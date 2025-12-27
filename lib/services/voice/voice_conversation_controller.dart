@@ -11,10 +11,15 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' show VoidCallback;
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 
+import '../../data/models/ai_response_models.dart';
 import 'audio_stream_service.dart';
 import 'openai_realtime_service.dart';
 import 'realtime_events.dart';
@@ -102,6 +107,18 @@ class VoiceConversationController extends GetxController {
 
   /// Whether continuous listening is paused (user can pause/resume)
   final RxBool isPaused = false.obs;
+
+  /// Current structured AI response (for UI display of weather, routes, etc.)
+  final Rxn<AIResponse> currentStructuredResponse = Rxn<AIResponse>();
+
+  /// List of structured responses in the conversation
+  final RxList<AIResponse> structuredResponses = <AIResponse>[].obs;
+
+  /// Conversation ID for session continuity
+  final Rxn<String> conversationId = Rxn<String>();
+
+  /// Whether we have a structured response for the current AI message
+  final RxBool hasStructuredData = false.obs;
 
   // ===========================================================================
   // PRIVATE PROPERTIES
@@ -525,6 +542,9 @@ class VoiceConversationController extends GetxController {
     // Add AI response to conversation history
     if (aiResponseText.value.isNotEmpty) {
       conversationHistory.add(ConversationTurn.assistant(aiResponseText.value));
+
+      // Detect intent and fetch structured data from text API
+      _fetchStructuredDataIfNeeded();
     }
 
     _currentResponseItemId = null;
@@ -532,6 +552,153 @@ class VoiceConversationController extends GetxController {
 
     // Wait for audio playback to complete before restarting listening
     _waitForPlaybackAndRestartListening();
+  }
+
+  /// Detects if the user query needs structured data and fetches it from text API
+  Future<void> _fetchStructuredDataIfNeeded() async {
+    // Get the last user message
+    final userMessages = conversationHistory
+        .where((turn) => turn.role == 'user')
+        .toList();
+
+    if (userMessages.isEmpty) {
+      print('ℹ️ No user messages found, skipping structured data fetch');
+      return;
+    }
+
+    final lastUserMessage = userMessages.last.transcript.toLowerCase();
+    print('======== CHECKING FOR STRUCTURED DATA ========');
+    print('Last user message: $lastUserMessage');
+
+    // Detect intent keywords
+    final bool isWeatherQuery = lastUserMessage.contains('weather') ||
+        lastUserMessage.contains('conditions') ||
+        lastUserMessage.contains('safe to sail') ||
+        lastUserMessage.contains('forecast') ||
+        lastUserMessage.contains('wind') ||
+        lastUserMessage.contains('waves');
+
+    final bool isAssistanceQuery = lastUserMessage.contains('assistance') ||
+        lastUserMessage.contains('marina') ||
+        lastUserMessage.contains('fuel') ||
+        lastUserMessage.contains('repair') ||
+        lastUserMessage.contains('emergency') ||
+        lastUserMessage.contains('help me find');
+
+    final bool isRouteQuery = lastUserMessage.contains('route') ||
+        lastUserMessage.contains('plan') ||
+        lastUserMessage.contains('trip') ||
+        lastUserMessage.contains('sail from') ||
+        lastUserMessage.contains('sail to') ||
+        lastUserMessage.contains('voyage');
+
+    print('Is Weather Query: $isWeatherQuery');
+    print('Is Assistance Query: $isAssistanceQuery');
+    print('Is Route Query: $isRouteQuery');
+
+    if (!isWeatherQuery && !isAssistanceQuery && !isRouteQuery) {
+      print('ℹ️ Not a structured query type, skipping API call');
+      return;
+    }
+
+    // Fetch structured data from text API
+    try {
+      final baseUrl = dotenv.env['BACKEND_URL'] ?? 'http://10.0.2.2:8000';
+      final url = '$baseUrl/maritime-chat';
+
+      print('======== FETCHING STRUCTURED DATA ========');
+      print('URL: $url');
+      print('Message: ${userMessages.last.transcript}');
+
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'message': userMessages.last.transcript,
+          'user_location': 'Unknown', // TODO: Get actual location
+        }),
+      ).timeout(const Duration(seconds: 30));
+
+      print('======== STRUCTURED API RESPONSE ========');
+      print('Status: ${response.statusCode}');
+      print('Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final aiResponse = AIResponse.fromJson(json);
+
+        print('======== PARSED STRUCTURED RESPONSE ========');
+        print('Type: ${aiResponse.type}');
+        print('Has Report: ${aiResponse.weatherReport != null}');
+        print('Has Assistance: ${aiResponse.localAssistance != null}');
+        print('Has Trip Plan: ${aiResponse.tripPlan != null}');
+
+        if (aiResponse.hasStructuredData) {
+          currentStructuredResponse.value = aiResponse;
+          structuredResponses.add(aiResponse);
+          hasStructuredData.value = true;
+          print('✅ SUCCESS: Got structured data - ${aiResponse.type.value}');
+        } else {
+          print('ℹ️ API returned normal response (no structured data)');
+        }
+      } else {
+        print('❌ API call failed: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('❌ Error fetching structured data: $e');
+    }
+  }
+
+  /// Attempts to parse structured data from AI response
+  ///
+  /// The AI may include structured JSON in its response that we can
+  /// use to display rich UI (weather cards, route maps, assistance lists).
+  void _parseStructuredResponse(String responseText) {
+    print('======== VOICE RESPONSE PARSING ========');
+    print('Response length: ${responseText.length}');
+    print('Response preview: ${responseText.substring(0, responseText.length.clamp(0, 200))}...');
+
+    hasStructuredData.value = false;
+    currentStructuredResponse.value = null;
+
+    // Try to find JSON in the response
+    final jsonPattern = RegExp(r'\{[\s\S]*"response"[\s\S]*"type"[\s\S]*\}');
+    final match = jsonPattern.firstMatch(responseText);
+
+    print('JSON pattern match found: ${match != null}');
+
+    if (match != null) {
+      try {
+        final jsonStr = match.group(0)!;
+        print('======== EXTRACTED JSON ========');
+        print(jsonStr);
+
+        final aiResponse = AIResponse.fromJsonString(jsonStr);
+
+        print('======== PARSED AI RESPONSE ========');
+        print('Type: ${aiResponse.type}');
+        print('Has Report: ${aiResponse.weatherReport != null}');
+        print('Has Assistance: ${aiResponse.localAssistance != null}');
+        print('Has Trip Plan: ${aiResponse.tripPlan != null}');
+        print('Has Structured Data: ${aiResponse.hasStructuredData}');
+
+        if (aiResponse.hasStructuredData) {
+          currentStructuredResponse.value = aiResponse;
+          structuredResponses.add(aiResponse);
+          hasStructuredData.value = true;
+          // ignore: avoid_print
+          print('📊 SUCCESS: Parsed structured response: ${aiResponse.type.value}');
+        } else {
+          print('ℹ️ Response parsed but no structured data fields present');
+        }
+      } catch (e) {
+        // JSON parsing failed, that's okay - not all responses have structured data
+        // ignore: avoid_print
+        print('❌ Could not parse structured response: $e');
+      }
+    } else {
+      print('ℹ️ No JSON pattern found in response');
+    }
   }
 
   /// Waits for audio playback to finish, then restarts listening
@@ -646,6 +813,40 @@ class VoiceConversationController extends GetxController {
 
   /// Gets the amplitude stream for waveform
   Stream<dynamic>? get amplitudeStream => _audioService.amplitudeStream;
+
+  /// Sets a structured response directly (for text API responses)
+  void setStructuredResponse(AIResponse response) {
+    currentStructuredResponse.value = response;
+    structuredResponses.add(response);
+    hasStructuredData.value = response.hasStructuredData;
+
+    // Also add to conversation history
+    if (response.message.isNotEmpty) {
+      conversationHistory.add(ConversationTurn.assistant(response.message));
+    }
+  }
+
+  /// Clears the current structured response
+  void clearStructuredResponse() {
+    currentStructuredResponse.value = null;
+    hasStructuredData.value = false;
+  }
+
+  /// Gets the current conversation ID for session sharing
+  String? getConversationId() {
+    return conversationId.value;
+  }
+
+  /// Sets the conversation ID (for resuming sessions)
+  void setConversationId(String? id) {
+    conversationId.value = id;
+  }
+
+  /// Action callback for starting a trip
+  VoidCallback? onStartTrip;
+
+  /// Action callback for viewing location on map
+  void Function(String location)? onViewOnMap;
 
   // ===========================================================================
   // ERROR HANDLING
