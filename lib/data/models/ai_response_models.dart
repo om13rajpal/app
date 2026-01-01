@@ -579,12 +579,19 @@ class AIResponseContent {
 /// Main AI response wrapper
 class AIResponse {
   final AIResponseContent response;
+  final AudioData? audio;
 
-  const AIResponse({required this.response});
+  const AIResponse({required this.response, this.audio});
 
   factory AIResponse.fromJson(Map<String, dynamic> json) {
+    AudioData? audioData;
+    if (json['audio'] != null) {
+      audioData = AudioData.fromJson(json['audio'] as Map<String, dynamic>);
+    }
+
     return AIResponse(
       response: AIResponseContent.fromJson(json['response'] as Map<String, dynamic>? ?? {}),
+      audio: audioData,
     );
   }
 
@@ -593,9 +600,15 @@ class AIResponse {
     return AIResponse.fromJson(json);
   }
 
-  Map<String, dynamic> toJson() => {
-    'response': response.toJson(),
-  };
+  Map<String, dynamic> toJson() {
+    final map = <String, dynamic>{
+      'response': response.toJson(),
+    };
+    if (audio != null) {
+      map['audio'] = audio!.toJson();
+    }
+    return map;
+  }
 
   String toJsonString() => jsonEncode(toJson());
 
@@ -606,6 +619,46 @@ class AIResponse {
   List<LocalAssistanceContact>? get localAssistance => response.localAssistance;
   TripPlan? get tripPlan => response.tripPlan;
   bool get hasStructuredData => response.hasStructuredData;
+  bool get hasAudio => audio?.hasAudio ?? false;
+  String? get audioBase64 => audio?.audioBase64;
+}
+
+// =============================================================================
+// AUDIO DATA MODEL
+// =============================================================================
+
+/// Audio data from TTS response
+class AudioData {
+  final String? audioBase64;
+  final String audioFormat;
+  final String audioMimeType;
+  final String voice;
+
+  const AudioData({
+    this.audioBase64,
+    this.audioFormat = 'mp3',
+    this.audioMimeType = 'audio/mpeg',
+    this.voice = 'nova',
+  });
+
+  factory AudioData.fromJson(Map<String, dynamic> json) {
+    return AudioData(
+      audioBase64: json['audio_base64'] as String?,
+      audioFormat: json['audio_format'] as String? ?? 'mp3',
+      audioMimeType: json['audio_mime_type'] as String? ?? 'audio/mpeg',
+      voice: json['voice'] as String? ?? 'nova',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'audio_base64': audioBase64,
+    'audio_format': audioFormat,
+    'audio_mime_type': audioMimeType,
+    'voice': voice,
+  };
+
+  /// Check if audio data is available
+  bool get hasAudio => audioBase64 != null && audioBase64!.isNotEmpty;
 }
 
 // =============================================================================

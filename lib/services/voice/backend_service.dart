@@ -33,11 +33,16 @@ class SessionCreateRequest {
   /// Conversation ID for resuming previous sessions
   final String? conversationId;
 
+  /// Whether to preload weather data into voice session context
+  /// Set to false to disable automatic weather preloading (default: true)
+  final bool preloadWeather;
+
   const SessionCreateRequest({
     this.authToken,
     this.userLocation,
     this.coordinates,
     this.conversationId,
+    this.preloadWeather = true,
   });
 
   Map<String, dynamic> toJson() {
@@ -46,6 +51,7 @@ class SessionCreateRequest {
       if (userLocation != null) 'user_location': userLocation,
       if (coordinates != null) 'coordinates': coordinates,
       if (conversationId != null) 'conversation_id': conversationId,
+      'preload_weather': preloadWeather,
     };
   }
 }

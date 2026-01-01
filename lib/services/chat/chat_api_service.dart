@@ -31,6 +31,9 @@ class ChatRequest {
   final String? userLocation;
   final List<List<double>>? coordinates;
   final List<VesselInfo>? vessels;
+  final bool includeAudio;
+  final String audioVoice;
+  final bool preloadWeather;
 
   const ChatRequest({
     required this.message,
@@ -39,6 +42,9 @@ class ChatRequest {
     this.userLocation,
     this.coordinates,
     this.vessels,
+    this.includeAudio = false,
+    this.audioVoice = 'nova',
+    this.preloadWeather = true,
   });
 
   Map<String, dynamic> toJson() {
@@ -50,6 +56,9 @@ class ChatRequest {
       if (userLocation != null) 'user_location': userLocation,
       if (coordinates != null) 'coordinates': coordinates,
       if (vessels != null) 'vessels': vessels!.map((v) => v.toJson()).toList(),
+      'include_audio': includeAudio,
+      'audio_voice': audioVoice,
+      'preload_weather': preloadWeather,
     };
   }
 }
@@ -132,6 +141,21 @@ class StreamEvent {
   String? get content => data['content'] as String?;
   Map<String, dynamic>? get response => data['response'] as Map<String, dynamic>?;
   String? get message => data['message'] as String?;
+
+  /// Audio data from TTS (only in complete events when include_audio=true)
+  Map<String, dynamic>? get audio => data['audio'] as Map<String, dynamic>?;
+
+  /// Check if this event has audio data
+  bool get hasAudio => audio != null && audio!['audio_base64'] != null;
+
+  /// Get base64-encoded audio data
+  String? get audioBase64 => audio?['audio_base64'] as String?;
+
+  /// Get audio format (mp3, opus, etc.)
+  String? get audioFormat => audio?['audio_format'] as String?;
+
+  /// Get audio MIME type
+  String? get audioMimeType => audio?['audio_mime_type'] as String?;
 }
 
 // =============================================================================
@@ -177,11 +201,19 @@ class ChatApiService extends GetxService {
   // ===========================================================================
 
   /// Send a chat message and get a structured response
+  ///
+  /// Parameters:
+  /// - [includeAudio]: If true, includes TTS audio in response (default: false)
+  /// - [audioVoice]: Voice for TTS (alloy, echo, fable, onyx, nova, shimmer)
+  /// - [preloadWeather]: If false, skips weather preloading into context (default: true)
   Future<AIResponse> sendMessage({
     required String message,
     String? userLocation,
     List<List<double>>? coordinates,
     List<VesselInfo>? vessels,
+    bool includeAudio = false,
+    String audioVoice = 'nova',
+    bool preloadWeather = true,
   }) async {
     isLoading.value = true;
 
@@ -193,6 +225,9 @@ class ChatApiService extends GetxService {
         userLocation: userLocation,
         coordinates: coordinates,
         vessels: vessels,
+        includeAudio: includeAudio,
+        audioVoice: audioVoice,
+        preloadWeather: preloadWeather,
       );
 
       print('======== CHAT REQUEST ========');
@@ -237,12 +272,20 @@ class ChatApiService extends GetxService {
   }
 
   /// Send a chat message with context (shared with voice sessions)
+  ///
+  /// Parameters:
+  /// - [includeAudio]: If true, includes TTS audio in response (default: false)
+  /// - [audioVoice]: Voice for TTS (alloy, echo, fable, onyx, nova, shimmer)
+  /// - [preloadWeather]: If false, skips weather preloading into context (default: true)
   Future<AIResponse> sendMessageWithContext({
     required String message,
     required String conversationId,
     String? userLocation,
     List<List<double>>? coordinates,
     List<VesselInfo>? vessels,
+    bool includeAudio = false,
+    String audioVoice = 'nova',
+    bool preloadWeather = true,
   }) async {
     isLoading.value = true;
     currentConversationId.value = conversationId;
@@ -254,6 +297,9 @@ class ChatApiService extends GetxService {
         userLocation: userLocation,
         coordinates: coordinates,
         vessels: vessels,
+        includeAudio: includeAudio,
+        audioVoice: audioVoice,
+        preloadWeather: preloadWeather,
       );
 
       final uri = Uri.parse('$_baseUrl/chat/with-context').replace(
@@ -281,11 +327,19 @@ class ChatApiService extends GetxService {
   }
 
   /// Stream a chat response with real-time updates
+  ///
+  /// Parameters:
+  /// - [includeAudio]: If true, includes TTS audio in final complete event (default: false)
+  /// - [audioVoice]: Voice for TTS (alloy, echo, fable, onyx, nova, shimmer)
+  /// - [preloadWeather]: If false, skips weather preloading into context (default: true)
   Stream<StreamEvent> streamMessage({
     required String message,
     String? userLocation,
     List<List<double>>? coordinates,
     List<VesselInfo>? vessels,
+    bool includeAudio = false,
+    String audioVoice = 'nova',
+    bool preloadWeather = true,
   }) async* {
     isLoading.value = true;
     streamingMessage.value = '';
@@ -298,6 +352,9 @@ class ChatApiService extends GetxService {
         userLocation: userLocation,
         coordinates: coordinates,
         vessels: vessels,
+        includeAudio: includeAudio,
+        audioVoice: audioVoice,
+        preloadWeather: preloadWeather,
       );
 
       final httpRequest = http.Request('POST', Uri.parse('$_baseUrl/maritime-chat/stream'));

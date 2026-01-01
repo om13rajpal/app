@@ -616,6 +616,7 @@ class VoiceConversationController extends GetxController {
         body: jsonEncode({
           'message': userMessages.last.transcript,
           'user_location': 'Unknown', // TODO: Get actual location
+          'preload_weather': false, // Don't preload weather - let the tool fetch it
         }),
       ).timeout(const Duration(seconds: 30));
 
